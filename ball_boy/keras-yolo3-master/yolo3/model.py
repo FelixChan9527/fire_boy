@@ -362,6 +362,10 @@ def box_iou(b1, b2):
     -------
     iou: tensor, shape=(i1,...,iN, j)
 
+    # 此处b1是预测的某个尺度的某张照片的输出，每个网格的位置有三个anchor box对应的值
+    # 而b2是真实的标签的值，每个网格的位置只有一个anchor box对应的值，这个
+    # anchor box就是ground true所在的anchor box
+
     '''
 
     # Expand dim to apply broadcasting.
@@ -441,15 +445,34 @@ def yolo_loss(args, anchors, num_classes, ignore_thresh=.5, print_loss=False):
         # Find ignore mask, iterate over each of batch.
         ignore_mask = tf.TensorArray(K.dtype(y_true[0]), size=1, dynamic_size=True)
         object_mask_bool = K.cast(object_mask, 'bool')      # 转换类型，转为布尔
+        # 这一步是为了筛选出背景所在的anchor box。因为iou如果大于阈值，则证明了这个anchor box的
+        # bounding box其实是包含物体的一部分的，只是中心不在这个box里（因为ground true的所在位置
+        # 不是这个）。所以接下来对预测的所有网格的所有bounding box，每一个bounding box对所有的
+        # grounding true都计算一次iou，然后取出这个bounding box最大的iou（即9个中的其中一个），
+        # 那么这个iou就是判断这个bounding box是否为背景的标准，如果iou小于阈值，那么这个bounding box
+        # 就可以看作大部分都是背景，否则，大部分都是物体。我们计算objectness的损失时，包括了存在物
+        # 体中心的损失以及背景的损失，前者可以通过ground true所在的位置进行筛选，后者可通过ground true
+        # 不存在的并且boundng box的iou小于阈值来选出背景的位置。
+        # 为什么不单靠iou小于阈值来选出背景？因为单靠这一个条件，假如预测的这个位置本来应该是有ground true，
+        # 但是预测出来计算的iou可能是小于阈值的，我们不能把它归到背景的损失中去，而是归到存在物体中心的损失。
+        # 为什么要用iou小于阈值的bounding box来作为背景的损失？因为背景是不应该有框的预测，即预测背景所有
+        # 的值都应该是0，假如iou大于0而小于阈值，那么这个我们就必须惩罚预测出bounding box的iou，因为这个
+        # iou本来是为0的。
+        # 假如存在一个bounding box，但是ground true不在这个位置，并且iou大于阈值，该怎么处理？
+        # 忽略它，就是论文所说到，对于iou大于阈值但是anchor box重叠的并不是最大的（最大的就是ground true
+        # 所在的位置），直接忽略就行，因为它框住了大部分的物体，但是物体中心不在这。
         def loop_body(b, ignore_mask):
             # 得到第l个尺度中第b张图片的所有ground true坐标宽高（以归一化），即objectness为1的对应的值
             # 将一张图片的所有ground true
+            # 这一步把原本ground true所在的网格下的3个anchor box的位置
+            # 变为仅有存在ground true的anchor box的位置的值
             true_box = tf.boolean_mask(y_true[l][b,...,0:4], object_mask_bool[b,...,0])
             # 预测的所有bounding box与一张图的所有ground true计算iou
             iou = box_iou(pred_box[b], true_box)    
             # 每个bounding box在所有ground true中最大的一个iou，此处的iou
             best_iou = K.max(iou, axis=-1)     
-            # 选出存在ground true而且iou最优但iou低于阈值的网格位置
+            # 找出一个网格中iou最优但iou低于阈值的网格位置，如果这个网格的最优iou
+            # 都低于阈值，那么它一定是背景
             ignore_mask = ignore_mask.write(b, K.cast(best_iou<ignore_thresh, K.dtype(true_box)))
             return b+1, ignore_mask
         # 遍历图像
