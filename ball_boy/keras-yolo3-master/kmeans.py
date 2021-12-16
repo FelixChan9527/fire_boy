@@ -8,6 +8,7 @@ class YOLO_Kmeans:
         self.filename = "2012_train.txt"
 
     def iou(self, boxes, clusters):  # 1 box -> k clusters
+        # 计算了box与类中心的iou
         n = boxes.shape[0]
         k = self.cluster_number
 
@@ -40,18 +41,19 @@ class YOLO_Kmeans:
         distances = np.empty((box_number, k))
         last_nearest = np.zeros((box_number,))
         np.random.seed()
-        clusters = boxes[np.random.choice(
+        clusters = boxes[np.random.choice(      # 先随机挑k个box作为k个类的类中心
             box_number, k, replace=False)]  # init k clusters
         while True:
 
             distances = 1 - self.iou(boxes, clusters)
 
-            current_nearest = np.argmin(distances, axis=1)
-            if (last_nearest == current_nearest).all():
+            current_nearest = np.argmin(distances, axis=1)      # 每个box都找出距离最小的类别
+            # 如果迭代得到的距离结果不变，则收敛，停止迭代
+            if (last_nearest == current_nearest).all():         # 如果迭代得到的距离结果不变，则收敛，停止迭代
                 break  # clusters won't change
             for cluster in range(k):
-                clusters[cluster] = dist(  # update clusters
-                    boxes[current_nearest == cluster], axis=0)
+                clusters[cluster] = dist(  # update clusters    # 根据所分的类别，计算box的均值作为新的类别中心
+                    boxes[current_nearest == cluster], axis=0)  
 
             last_nearest = current_nearest
 
